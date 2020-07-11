@@ -35,9 +35,9 @@ func (l *SkipLog) Length() int {
 	return l.length
 }
 
-func (l *SkipLog) Append(offset uint64, command string) {
-	//l.Lock()
-	//defer l.Unlock()
+func (l *SkipLog) Insert(offset int64, entry string) {
+	l.Lock()
+	defer l.Unlock()
 
 	level := l.getLevel()
 
@@ -46,15 +46,21 @@ func (l *SkipLog) Append(offset uint64, command string) {
 		l.levels = level
 	}
 
-	n := &node{next: [maxLevel]*node{}, level: level, offset: offset, command: command}
+	newNode := &node{
+		next: [maxLevel]*node{},
+		level: level,
+		offset: offset,
+		entry: entry,
+	}
+
 	l.length++
 
 	newHeads := true
 	newTails := true
 
 	if !l.IsEmpty() {
-		newHeads = n.offset < l.heads[0].offset
-		newTails = n.offset > l.tails[0].offset
+		newHeads = newNode.offset < l.heads[0].offset
+		newTails = newNode.offset > l.tails[0].offset
 	}
 
 	normallyInserted := false
@@ -72,21 +78,21 @@ func (l *SkipLog) Append(offset uint64, command string) {
 			}
 
 			// Connect node to next
-			if point <= level && (next == nil || next.offset > n.offset) {
-				n.next[point] = next
+			if point <= level && (next == nil || next.offset > newNode.offset) {
+				newNode.next[point] = next
 				if current != nil {
 					current.next[point] = next
 				}
 
 				if point == 0 {
-					n.prev = current
+					newNode.prev = current
 					if next != nil {
-						next.prev = n
+						next.prev = newNode
 					}
 				}
 			}
 
-			if next != nil && next.offset <= n.offset {
+			if next != nil && next.offset <= newNode.offset {
 				current = next
 			} else {
 				point--
@@ -102,14 +108,14 @@ func (l *SkipLog) Append(offset uint64, command string) {
 		if newHeads || normallyInserted {
 			if l.heads[i] == nil || l.heads[i].offset > offset {
 				if i == 0 && l.heads[0] != nil {
-					l.heads[0].prev = n
+					l.heads[0].prev = newNode
 				}
-				n.next[i] = l.heads[i]
+				newNode.next[i] = l.heads[i]
 			}
 
 			// link the tails to the new node
-			if n.next[i] == nil {
-				l.tails[i] = n
+			if newNode.next[i] == nil {
+				l.tails[i] = newNode
 			}
 
 			adjusted = true
@@ -121,17 +127,17 @@ func (l *SkipLog) Append(offset uint64, command string) {
 
 			if !newHeads {
 				if l.tails[i] != nil {
-					l.tails[i].next[i] = n
+					l.tails[i].next[i] = newNode
 				}
 				if i == 0 {
-					n.prev = l.tails[0]
+					newNode.prev = l.tails[0]
 				}
-				l.tails[i] = n
+				l.tails[i] = newNode
 			}
 
 			// Link the heads to the new node
-			if l.heads[i] == nil || l.heads[i].offset > n.offset {
-				l.heads[i] = n
+			if l.heads[i] == nil || l.heads[i].offset > newNode.offset {
+				l.heads[i] = newNode
 			}
 
 			adjusted = true
@@ -143,7 +149,7 @@ func (l *SkipLog) Append(offset uint64, command string) {
 	}
 }
 
-func (l *SkipLog) entryPoint(offset uint64, level int) int {
+func (l *SkipLog) entryPoint(offset int64, level int) int {
 	for i := l.levels; i >= 0; i-- {
 		if l.heads[i] != nil && l.heads[i].offset <= offset || i < level {
 			return i
@@ -157,7 +163,7 @@ func (l *SkipLog) IsEmpty() bool {
 	return l.heads[0] == nil
 }
 
-func (l *SkipLog) find(offset uint64, gte bool) (string, uint64, error) {
+func (l *SkipLog) find(offset int64, gte bool) (string, int64, error) {
 	if l.IsEmpty() {
 		return "", 0, ErrTransactionLogIsEmpty
 	}
@@ -168,12 +174,12 @@ func (l *SkipLog) find(offset uint64, gte bool) (string, uint64, error) {
 	next := current
 
 	if gte && current.offset > offset {
-		return current.command, current.offset, nil
+		return current.entry, current.offset, nil
 	}
 
 	for {
 		if current.offset == offset {
-			return current.command, current.offset, nil
+			return current.entry, current.offset, nil
 		}
 
 		next = current.next[point]
@@ -185,16 +191,16 @@ func (l *SkipLog) find(offset uint64, gte bool) (string, uint64, error) {
 		} else {
 			if point > 0 {
 				if current.next[0] != nil && current.next[0].offset == offset {
-					return current.next[0].command, current.next[0].offset, nil
+					return current.next[0].entry, current.next[0].offset, nil
 				}
 				point--
 			} else {
 				if gte && next != nil {
-					return next.command, next.offset, nil
+					return next.entry, next.offset, nil
 				}
 
 				if current.next[0] != nil && current.next[0].offset == offset {
-					return current.next[0].command, current.next[0].offset, nil
+					return current.next[0].entry, current.next[0].offset, nil
 				}
 
 				return "", 0, errors.Wrapf(ErrOffsetNotFound, "%d", offset)
@@ -203,7 +209,7 @@ func (l *SkipLog) find(offset uint64, gte bool) (string, uint64, error) {
 	}
 }
 
-func (l *SkipLog) Find(offset uint64) (string, error) {
+func (l *SkipLog) Find(offset int64) (string, error) {
 	l.RLock()
 	defer l.RUnlock()
 
@@ -212,7 +218,8 @@ func (l *SkipLog) Find(offset uint64) (string, error) {
 	return command, err
 }
 
-func (l *SkipLog) FindGTE(offsetGte uint64) (string, uint64, error) {
+// FirstGTE - looks for the first node that is greater or equal to the given offset
+func (l *SkipLog) FirstGTE(offsetGte int64) (string, int64, error) {
 	l.RLock()
 	defer l.RUnlock()
 
