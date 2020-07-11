@@ -16,7 +16,7 @@ func TestSkipLog(t *testing.T) {
 		tl.Insert(50, "50 - entry")
 		tl.Insert(1540, "1540 - entry")
 
-		assert.Equal(t, 5, tl.Length())
+		assert.Equal(t, 5, tl.Len())
 
 		e3, err := tl.Find(984)
 		assert.NoError(t, err)
@@ -50,13 +50,54 @@ func TestSkipLog(t *testing.T) {
 		sl.Insert(now.Add(3*time.Second).Unix(), "1003 - entry")
 		sl.Insert(now.Add(4*time.Second).Unix(), "1004 - entry")
 
-		assert.Equal(t, 5, sl.Length())
+		assert.Equal(t, 5, sl.Len())
 
 		e1, offset, err := sl.FirstGTE(now.Add(2*time.Second).Unix())
 		assert.NoError(t, err)
 
 		assert.Equal(t, now.Add(2*time.Second).Unix(), offset)
 		assert.Equal(t, "1002 - entry", e1)
+	})
+
+	t.Run("heads-and-tails", func(t *testing.T) {
+		tl := skiplog.New()
+		tl.Insert(55, "55 - entry")
+		tl.Insert(66, "66 - entry")
+		tl.Insert(52, "52 - entry")
+		tl.Insert(69, "69 - entry")
+		tl.Insert(3, "3 - entry")
+		tl.Insert(30, "30 - entry")
+		tl.Insert(90, "90 - entry")
+
+		assert.Equal(t, 7, tl.Len())
+
+		n1, err := tl.Find(55)
+		assert.NoError(t, err)
+		assert.Equal(t, "55 - entry", n1)
+
+		n2, err := tl.Find(69)
+		assert.NoError(t, err)
+		assert.Equal(t, "69 - entry", n2)
+
+		n3, err := tl.Find(3)
+		assert.NoError(t, err)
+		assert.Equal(t, "3 - entry", n3)
+
+		n4, err := tl.Find(66)
+		assert.NoError(t, err)
+		assert.Equal(t, "66 - entry", n4)
+
+		n5, err := tl.Find(30)
+		assert.NoError(t, err)
+		assert.Equal(t, "30 - entry", n5)
+
+		n6, err := tl.Find(90)
+		assert.NoError(t, err)
+		assert.Equal(t, "90 - entry", n6)
+
+		n7, err := tl.Find(52)
+		assert.NoError(t, err)
+		assert.Equal(t, "52 - entry", n7)
 	})
 }
 

@@ -12,7 +12,7 @@ var ErrOffsetNotFound = errors.New("offset not found")
 const maxLevel = 25
 
 type SkipLog struct {
-	sync.RWMutex
+	mu sync.RWMutex
 	heads    [maxLevel]*node
 	tails    [maxLevel]*node
 	maxLevel int
@@ -29,15 +29,15 @@ func New() *SkipLog {
 	}
 }
 
-func (l *SkipLog) Length() int {
-	l.RLock()
-	defer l.RUnlock()
+func (l *SkipLog) Len() int {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	return l.length
 }
 
 func (l *SkipLog) Insert(offset int64, entry string) {
-	l.Lock()
-	defer l.Unlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
 	level := l.getLevel()
 
@@ -48,7 +48,6 @@ func (l *SkipLog) Insert(offset int64, entry string) {
 
 	newNode := &node{
 		next: [maxLevel]*node{},
-		level: level,
 		offset: offset,
 		entry: entry,
 	}
@@ -110,6 +109,7 @@ func (l *SkipLog) Insert(offset int64, entry string) {
 					l.heads[0].prev = newNode
 				}
 				newNode.next[i] = l.heads[i]
+				l.heads[i] = newNode
 			}
 
 			// link the tails to the new node
@@ -159,11 +159,17 @@ func (l *SkipLog) entryPoint(offset int64, level int) int {
 }
 
 func (l *SkipLog) IsEmpty() bool {
-	return l.heads[0] == nil
+	l.mu.RLock()
+	defer l.mu.Unlock()
+	return l.empty()
+}
+
+func (l *SkipLog) empty() bool {
+	return l.heads[0] == nil && l.tails[0] == nil
 }
 
 func (l *SkipLog) find(offset int64, gte bool) (string, int64, error) {
-	if l.IsEmpty() {
+	if l.empty() {
 		return "", 0, ErrTransactionLogIsEmpty
 	}
 
@@ -209,8 +215,8 @@ func (l *SkipLog) find(offset int64, gte bool) (string, int64, error) {
 }
 
 func (l *SkipLog) Find(offset int64) (string, error) {
-	l.RLock()
-	defer l.RUnlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 
 	command, _, err := l.find(offset, false)
 
@@ -219,8 +225,8 @@ func (l *SkipLog) Find(offset int64) (string, error) {
 
 // FirstGTE - looks for the first node that is greater or equal to the given offset
 func (l *SkipLog) FirstGTE(offsetGte int64) (string, int64, error) {
-	l.RLock()
-	defer l.RUnlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 
 	return l.find(offsetGte, true)
 }

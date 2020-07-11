@@ -2,7 +2,6 @@ package skiplog
 
 type node struct {
 	next   [maxLevel]*node
-	level  int
 	offset int64
 	entry  string
 	prev   *node
