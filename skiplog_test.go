@@ -49,14 +49,24 @@ func TestSkipLog(t *testing.T) {
 		sl.Insert(now.Add(2*time.Second).Unix(), "1002 - entry")
 		sl.Insert(now.Add(3*time.Second).Unix(), "1003 - entry")
 		sl.Insert(now.Add(4*time.Second).Unix(), "1004 - entry")
+		sl.Insert(now.Add(6*time.Second).Unix(), "1006 - entry")
 
-		assert.Equal(t, 5, sl.Len())
+		assert.Equal(t, 6, sl.Len())
 
 		e1, offset, err := sl.FirstGTE(now.Add(2*time.Second).Unix())
 		assert.NoError(t, err)
-
 		assert.Equal(t, now.Add(2*time.Second).Unix(), offset)
 		assert.Equal(t, "1002 - entry", e1)
+
+		e2, offset, err := sl.FirstGTE(now.Add(4*time.Second).Unix())
+		assert.NoError(t, err)
+		assert.Equal(t, now.Add(4*time.Second).Unix(), offset)
+		assert.Equal(t, "1004 - entry", e2)
+
+		e3, offset, err := sl.FirstGTE(now.Add(5*time.Second).Unix())
+		assert.NoError(t, err)
+		assert.Equal(t, now.Add(6*time.Second).Unix(), offset)
+		assert.Equal(t, "1006 - entry", e3)
 	})
 
 	t.Run("heads-and-tails", func(t *testing.T) {
@@ -98,6 +108,69 @@ func TestSkipLog(t *testing.T) {
 		n7, err := tl.Find(52)
 		assert.NoError(t, err)
 		assert.Equal(t, "52 - entry", n7)
+	})
+}
+
+func TestRemoveEntries(t *testing.T) {
+	entries := []struct{
+		offset int64
+		entry string
+	}{
+		{offset: 123, entry: "123 - entry"},
+		{offset: 236, entry: "236 - entry"},
+		{offset: 67, entry: "67 - entry"},
+		{offset: 999, entry: "999 - entry"},
+		{offset: 568, entry: "568 - entry"},
+		{offset: 124, entry: "124 - entry"},
+		{offset: 222, entry: "222 - entry"},
+		{offset: 2223, entry: "2223 - entry"},
+		{offset: 12, entry: "12 - entry"},
+	}
+
+	t.Run("insert and than remove all", func(t *testing.T) {
+		tl := skiplog.New()
+
+		for _, e := range entries {
+			tl.Insert(e.offset, e.entry)
+		}
+
+		assert.Equal(t, len(entries), tl.Len())
+
+		for _, e := range entries {
+			err := tl.Remove(e.offset)
+			assert.NoError(t, err)
+		}
+
+		assert.Equal(t, 0, tl.Len())
+
+		entry, err := tl.Find(222)
+		assert.Error(t, err)
+		assert.Equal(t, skiplog.ErrSkipLogIsEmpty, err)
+		assert.Equal(t, "", entry)
+	})
+
+	t.Run("insert and than remove some", func(t *testing.T) {
+		tl := skiplog.New()
+
+		for _, e := range entries {
+			tl.Insert(e.offset, e.entry)
+		}
+
+		assert.Equal(t, len(entries), tl.Len())
+
+		_ = tl.Remove(568)
+		_ = tl.Remove(123)
+
+		assert.Equal(t, len(entries) - 2, tl.Len())
+
+		e1, err := tl.Find(222)
+		assert.NoError(t, err)
+		assert.Equal(t, "222 - entry", e1)
+
+		e2, offset, err := tl.FirstGTE(123)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(124), offset)
+		assert.Equal(t, "124 - entry", e2)
 	})
 }
 

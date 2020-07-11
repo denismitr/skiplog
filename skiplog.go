@@ -6,7 +6,7 @@ import (
 	"sync"
 )
 
-var ErrTransactionLogIsEmpty = errors.New("transaction log is empty")
+var ErrSkipLogIsEmpty = errors.New("transaction log is empty")
 var ErrOffsetNotFound = errors.New("offset not found")
 
 const maxLevel = 25
@@ -15,7 +15,6 @@ type SkipLog struct {
 	mu sync.RWMutex
 	heads    [maxLevel]*node
 	tails    [maxLevel]*node
-	maxLevel int
 	levels   int
 	length   int
 }
@@ -24,7 +23,7 @@ func New() *SkipLog {
 	return &SkipLog{
 		heads:    [maxLevel]*node{},
 		tails:    [maxLevel]*node{},
-		maxLevel: maxLevel,
+		levels: 0,
 		length:   0,
 	}
 }
@@ -54,17 +53,12 @@ func (l *SkipLog) Insert(offset int64, entry string) {
 
 	l.length++
 
-	isHead := true
-	isTail := true
+	isNewHeads := l.isNewHeads(newNode)
+	isNewTails := l.isNewTails(newNode)
+	isNotNewHeadsOrTails := !isNewHeads && !isNewTails
 
-	if l.heads[0] != nil && l.tails[0] != nil {
-		isHead = newNode.offset < l.heads[0].offset
-		isTail = newNode.offset > l.tails[0].offset
-	}
-
-	norHeadsNorTails := !isHead && !isTail
-	if norHeadsNorTails {
-		point := l.entryPoint(offset, level)
+	if isNotNewHeadsOrTails {
+		point := l.entryLevel(offset, level)
 		var current *node
 		next := l.heads[point]
 
@@ -102,8 +96,7 @@ func (l *SkipLog) Insert(offset int64, entry string) {
 	}
 
 	for i := level; i >= 0; i-- {
-		adjusted := false
-		if isHead || norHeadsNorTails {
+		if isNewHeads || isNotNewHeadsOrTails {
 			if l.heads[i] == nil || l.heads[i].offset > offset {
 				if i == 0 && l.heads[0] != nil {
 					l.heads[0].prev = newNode
@@ -117,14 +110,14 @@ func (l *SkipLog) Insert(offset int64, entry string) {
 				l.tails[i] = newNode
 			}
 
-			adjusted = true
+			continue
 		}
 
-		if isTail {
+		if isNewTails {
 			// Places the new node after the very last node on this level
 			// So the first node is not linked to itself
 
-			if !isHead {
+			if !isNewHeads {
 				if l.tails[i] != nil {
 					l.tails[i].next[i] = newNode
 				}
@@ -139,18 +132,14 @@ func (l *SkipLog) Insert(offset int64, entry string) {
 				l.heads[i] = newNode
 			}
 
-			adjusted = true
-		}
-
-		if !adjusted {
-			break
+			continue
 		}
 	}
 }
 
-func (l *SkipLog) entryPoint(offset int64, level int) int {
+func (l *SkipLog) entryLevel(offset int64, level int) int {
 	for i := l.levels; i >= 0; i-- {
-		if l.heads[i] != nil && l.heads[i].offset <= offset || i < level {
+		if (l.heads[i] != nil && l.heads[i].offset <= offset) || i < level {
 			return i
 		}
 	}
@@ -170,15 +159,15 @@ func (l *SkipLog) empty() bool {
 
 func (l *SkipLog) find(offset int64, gte bool) (string, int64, error) {
 	if l.empty() {
-		return "", 0, ErrTransactionLogIsEmpty
+		return "", 0, ErrSkipLogIsEmpty
 	}
 
-	point := l.entryPoint(offset, 0)
+	level := l.entryLevel(offset, 0)
 
-	current := l.heads[point]
+	current := l.heads[level]
 	next := current
 
-	if gte && current.offset > offset {
+	if gte && current.offset >= offset {
 		return current.entry, current.offset, nil
 	}
 
@@ -187,30 +176,32 @@ func (l *SkipLog) find(offset int64, gte bool) (string, int64, error) {
 			return current.entry, current.offset, nil
 		}
 
-		next = current.next[point]
+		next = current.getNextAtLevel(level)
 
 		// Which direction to go next
 		if next != nil && next.offset < offset {
 			// Go right
 			current = next
-		} else {
-			if point > 0 {
-				if current.next[0] != nil && current.next[0].offset == offset {
-					return current.next[0].entry, current.next[0].offset, nil
-				}
-				point--
-			} else {
-				if gte && next != nil {
-					return next.entry, next.offset, nil
-				}
-
-				if current.next[0] != nil && current.next[0].offset == offset {
-					return current.next[0].entry, current.next[0].offset, nil
-				}
-
-				return "", 0, errors.Wrapf(ErrOffsetNotFound, "%d", offset)
-			}
+			continue
 		}
+
+		if level > 0 {
+			if current.hasNextAtLevelEqualTo(0, offset) {
+				return current.next[0].entry, current.next[0].offset, nil
+			}
+			level--
+			continue
+		}
+
+		if gte && next != nil {
+			return next.entry, next.offset, nil
+		}
+
+		if current.next[0] != nil && current.next[0].offset == offset {
+			return current.next[0].entry, current.next[0].offset, nil
+		}
+
+		return "", 0, errors.Wrapf(ErrOffsetNotFound, "%d", offset)
 	}
 }
 
@@ -231,11 +222,101 @@ func (l *SkipLog) FirstGTE(offsetGte int64) (string, int64, error) {
 	return l.find(offsetGte, true)
 }
 
+// Remove entry under offset from SkipLog
+func (l *SkipLog) Remove(offset int64) error {
+	if l.empty() {
+		return ErrSkipLogIsEmpty
+	}
+
+	level := l.entryLevel(offset, 0)
+
+	var current *node
+	var next *node
+
+	for {
+		if current == nil {
+			next = l.heads[level]
+		} else {
+			next = current.getNextAtLevel(level)
+		}
+
+		if next != nil && next.offset == offset {
+			return l.removeNode(current, next, level)
+		}
+
+		if next != nil && next.offset < offset {
+			current = next
+		} else {
+			level--
+			if level < 0 {
+				break
+			}
+		}
+	}
+
+	return nil
+}
+
+func (l *SkipLog) removeNode(current *node, next *node, level int) error {
+	if current != nil {
+		current.next[level] = next.next[level]
+	}
+
+	if level == 0 {
+		if next.hasNextAtLevel(0) {
+			next.getNextAtLevel(0).prev = current
+		}
+		l.length--
+	}
+
+	// Heads must be adjusted
+	if l.heads[level] == next {
+		l.heads[level] = next.next[level]
+		// This was the highest node
+		if l.heads[level] == nil {
+			l.levels--
+		}
+	}
+
+	// Tails must be adjusted
+	if next.next[level] == nil {
+		l.tails[level] = current
+	}
+
+	next.next[level] = nil
+
+	return nil
+}
+
 func (l *SkipLog) getLevel() int {
 	b := boolgen.New()
 	var n int
-	for b.Bool() && n < l.maxLevel {
+	for b.Bool() && n < l.levels {
 		n++
 	}
 	return n
+}
+
+func (l *SkipLog) isNewHeads(n *node) bool {
+	if n == nil {
+		return false
+	}
+
+	if l.heads[0] == nil {
+		return true
+	}
+
+	return n.offset < l.heads[0].offset
+}
+
+func (l *SkipLog) isNewTails(n *node) bool {
+	if n == nil {
+		return false
+	}
+
+	if l.tails[0] == nil {
+		return true
+	}
+
+	return n.offset > l.tails[0].offset
 }
