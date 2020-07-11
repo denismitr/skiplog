@@ -10,26 +10,34 @@ import (
 func TestSkipLog(t *testing.T) {
 	t.Run("basic", func(t *testing.T) {
 		tl := skiplog.New()
-		tl.Insert(1, "foo eat bar")
-		tl.Insert(984, "baz said boo")
-		tl.Insert(1345, "foo died")
-		tl.Insert(1540, "baz also died")
+		tl.Insert(1, "1 - entry")
+		tl.Insert(984, "984 - entry")
+		tl.Insert(1345, "1345 - entry")
+		tl.Insert(50, "50 - entry")
+		tl.Insert(1540, "1540 - entry")
 
-		assert.Equal(t, 4, tl.Length())
+		assert.Equal(t, 5, tl.Length())
 
-		c2, err := tl.Find(984)
+		e3, err := tl.Find(984)
 		assert.NoError(t, err)
 
-		c1, err := tl.Find(1)
+		e1, err := tl.Find(1)
 		assert.NoError(t, err)
 
-		c3, err := tl.Find(1345)
+		e4, err := tl.Find(1345)
 		assert.NoError(t, err)
 
-		assert.Equal(t, 4, tl.Length())
-		assert.Equal(t, "baz said boo", c2)
-		assert.Equal(t, "foo eat bar", c1)
-		assert.Equal(t, "foo died", c3)
+		e2, err := tl.Find(50)
+		assert.NoError(t, err)
+
+		e5, err := tl.Find(1540)
+		assert.NoError(t, err)
+
+		assert.Equal(t, "50 - entry", e2)
+		assert.Equal(t, "1 - entry", e1)
+		assert.Equal(t, "984 - entry", e3)
+		assert.Equal(t, "1345 - entry", e4)
+		assert.Equal(t, "1540 - entry", e5)
 	})
 
 	t.Run("sequence", func(t *testing.T) {

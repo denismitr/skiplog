@@ -55,17 +55,16 @@ func (l *SkipLog) Insert(offset int64, entry string) {
 
 	l.length++
 
-	newHeads := true
-	newTails := true
+	isHead := true
+	isTail := true
 
-	if !l.IsEmpty() {
-		newHeads = newNode.offset < l.heads[0].offset
-		newTails = newNode.offset > l.tails[0].offset
+	if l.heads[0] != nil && l.tails[0] != nil {
+		isHead = newNode.offset < l.heads[0].offset
+		isTail = newNode.offset > l.tails[0].offset
 	}
 
-	normallyInserted := false
-	if !newHeads && !newTails {
-		normallyInserted = true
+	norHeadsNorTails := !isHead && !isTail
+	if norHeadsNorTails {
 		point := l.entryPoint(offset, level)
 		var current *node
 		next := l.heads[point]
@@ -81,7 +80,7 @@ func (l *SkipLog) Insert(offset int64, entry string) {
 			if point <= level && (next == nil || next.offset > newNode.offset) {
 				newNode.next[point] = next
 				if current != nil {
-					current.next[point] = next
+					current.next[point] = newNode
 				}
 
 				if point == 0 {
@@ -105,7 +104,7 @@ func (l *SkipLog) Insert(offset int64, entry string) {
 
 	for i := level; i >= 0; i-- {
 		adjusted := false
-		if newHeads || normallyInserted {
+		if isHead || norHeadsNorTails {
 			if l.heads[i] == nil || l.heads[i].offset > offset {
 				if i == 0 && l.heads[0] != nil {
 					l.heads[0].prev = newNode
@@ -121,11 +120,11 @@ func (l *SkipLog) Insert(offset int64, entry string) {
 			adjusted = true
 		}
 
-		if newTails {
+		if isTail {
 			// Places the new node after the very last node on this level
 			// So the first node is not linked to itself
 
-			if !newHeads {
+			if !isHead {
 				if l.tails[i] != nil {
 					l.tails[i].next[i] = newNode
 				}
