@@ -8,6 +8,7 @@ import (
 
 var ErrSkipLogIsEmpty = errors.New("transaction log is empty")
 var ErrOffsetNotFound = errors.New("offset not found")
+var ErrInvalidRange = errors.New("invalid range")
 
 const maxLevel = 25
 
@@ -26,6 +27,46 @@ func New() *SkipLog {
 		levels: 0,
 		length:   0,
 	}
+}
+
+func (l *SkipLog) Iterator() Iterator {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	return &UnboundIterator{
+		sl: l,
+		current: l.heads[0],
+	}
+}
+
+func (l *SkipLog) Range(from, to int64) (Iterator, error) {
+	if to < from {
+		return nil, ErrInvalidRange
+	}
+
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	current, err := l.getNodeBeforeOrAt(from)
+	if err != nil {
+		if err == ErrOffsetNotFound {
+			return nil, errors.Wrapf(err, "offset %d not in the skip log", from)
+		}
+
+		return nil, err
+	}
+
+	return &BoundIterator{
+		UnboundIterator: UnboundIterator{
+			current: &node{
+				next: [maxLevel]*node{current},
+				prev: current,
+			},
+			sl: l,
+		},
+		uBound: to,
+		lBound: from,
+	}, nil
 }
 
 func (l *SkipLog) Len() int {
@@ -147,6 +188,25 @@ func (l *SkipLog) entryLevel(offset int64, level int) int {
 	return 0
 }
 
+func (l *SkipLog) getNodeBeforeOrAt(offset int64) (*node, error) {
+	if l.empty() {
+		return nil, ErrSkipLogIsEmpty
+	}
+
+	current := l.heads[0]
+	for i := l.levels; i >= 0; i-- {
+		for current != nil && current.hasNextAtLevelLT(i, offset) {
+			current = current.next[i]
+		}
+	}
+
+	if current != nil {
+		return current.next[0], nil
+	}
+
+	return nil, ErrOffsetNotFound
+}
+
 func (l *SkipLog) IsEmpty() bool {
 	l.mu.RLock()
 	defer l.mu.Unlock()
@@ -165,40 +225,24 @@ func (l *SkipLog) find(offset int64, gte bool) (string, int64, error) {
 	level := l.entryLevel(offset, 0)
 
 	current := l.heads[level]
-	next := current
-
-	if gte && current.offset >= offset {
-		return current.entry, current.offset, nil
-	}
 
 	for {
-		if current.offset == offset {
+		if current.offset == offset || (gte && current.offset > offset) {
 			return current.entry, current.offset, nil
 		}
 
-		next = current.getNextAtLevel(level)
+		if current.hasNextAtLevelEqualTo(level, offset) || (gte && current.hasNextAtLevelGTE(level, offset)) {
+			return current.next[level].entry, current.next[level].offset, nil
+		}
 
-		// Which direction to go next
-		if next != nil && next.offset < offset {
-			// Go right
-			current = next
+		if current.hasNextAtLevelLT(level, offset) {
+			current = current.getNextAtLevel(level)
 			continue
 		}
 
 		if level > 0 {
-			if current.hasNextAtLevelEqualTo(0, offset) {
-				return current.next[0].entry, current.next[0].offset, nil
-			}
 			level--
 			continue
-		}
-
-		if gte && next != nil {
-			return next.entry, next.offset, nil
-		}
-
-		if current.next[0] != nil && current.next[0].offset == offset {
-			return current.next[0].entry, current.next[0].offset, nil
 		}
 
 		return "", 0, errors.Wrapf(ErrOffsetNotFound, "%d", offset)
